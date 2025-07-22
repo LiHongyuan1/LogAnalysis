@@ -1,62 +1,73 @@
 # -*- coding: utf-8 -*-
-# Android Logging Tool
-# This tool help tester analyse Android Logging
-# Version : beta
 import re
 import logging
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-REGEX_EXP_RE = re.compile(r"([^ =]*) *= *[\"|'](.*)[\"|']")
+# 原有常量保留，不做改名
+REGEX_EXP_RE = re.compile(r'([^ =]*) *= *[\'"](.*?)[\'"]')
 ALL_SUPPORT_KEY = ["Severity", "Timestamp", "Process", "Thread", "Level", "Tag", "Message"]
 DEPRECATED_DATE_KEY = "data"
-timestamp_regex = re.compile(r'(0?[0-9]|1[0-9]|2[0-3]):(0?[0-9]|[1-5][0-9]):([0-9]{2})\.([0-9]{3})')
 
+# 更严谨的 Timestamp 正则：HH:MM:SS.mmm
+_TIMESTAMP_REGEX = r'(?:[01]?\d|2[0-3]):[0-5]?\d:[0-5]\d\.\d{3}'
+timestamp_regex = re.compile(_TIMESTAMP_REGEX)
+
+# 一次性匹配整行：severity / timestamp / process / thread / level / tag / message
+_parse_pattern = re.compile(
+    rf'^(?P<severity>.*?)\s*'
+    rf'(?P<timestamp>{_TIMESTAMP_REGEX})\s+'
+    rf'(?P<process>\S+)\s+'
+    rf'(?P<thread>\S+)\s+'
+    rf'(?P<level>\S+)\s+'
+    rf'(?P<tag>[^:]*):\s*(?P<message>.*)$'
+)
 
 class DataProcess:
-    key_order = list()
-
-    regex = None
+    """
+    提供两大静态方法：
+      - loading_logfile(file)：读入整个日志文件并返回行列表
+      - parse_linedata(line)：解析单行日志，返回
+        [severity, timestamp, process, thread, level, tag, message] 或 []
+    """
 
     @staticmethod
     def loading_logfile(file):
-        with open(file[0], "r", encoding="utf-8", errors="ignore") as infile:
-            for line in infile:
-                logger.debug("Line debug :" + line)
-                return line
+        """
+        读取日志文件所有行
+        :param file: 文件路径字符串，或可索引结构（如 QFileDialog 返回的 tuple），以 file[0] 为路径
+        :return: list of str，每行为文件的一行；出错时返回空列表
+        """
+        path = file[0] if isinstance(file, (list, tuple)) and file else file
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as infile:
+                lines = infile.readlines()
+            logger.info(f"Loaded {len(lines)} lines from {path}")
+            return lines
+        except Exception:
+            logger.exception(f"Failed to load logfile: {path}")
+            return []
 
-    # 对读入的每一行数据进行规则匹配
     @staticmethod
     def parse_linedata(line):
-        return_data = []
-        line = line.strip("\n")
-        timetmp = re.search(timestamp_regex, line)
-        if timetmp is None:
-            return return_data
-        else:
-            timestamp = timetmp.group()
-        severity = line.split(timestamp)[0]
-        return_data.append(severity)
-        return_data.append(timestamp)
-        data = re.sub(' +', ' ', line.split(timestamp)[1].split(":", 1)[0].strip(" "))
-        process = data.split(" ")[0]
-        thread = data.split(" ")[1]
-        level = data.split(" ")[2]
-        return_data.append(process)
-        return_data.append(thread)
-        return_data.append(level)
-        if int(data.count(" ")) > 3:
-            tag = data.split(" ", 3).pop(-1)
-            return_data.append(tag)
-        elif 3 == int(data.count(" ")):
-            tag = data.split(" ")[3]
-            return_data.append(tag)
-        elif 2 == int(data.count(" ")):
-            tag = " "
-            return_data.append(tag)
-        else:
-            pass
-        message = line.split(timestamp)[1].split(":", 1)[1]
-        return_data.append(message)
-        return return_data
+        """
+        将一行日志拆分为 [Severity, Timestamp, Process, Thread, Level, Tag, Message]
+        不匹配时返回 []
+        """
+        text = line.rstrip('\n')
+        m = _parse_pattern.match(text)
+        if not m:
+            return []
+
+        g = m.groupdict()
+        # strip() 防止前后多余空白
+        severity  = g.get('severity', '').strip()
+        timestamp = g.get('timestamp', '')
+        process   = g.get('process', '')
+        thread    = g.get('thread', '')
+        level     = g.get('level', '')
+        tag       = g.get('tag', '').strip()
+        message   = g.get('message', '')
+
+        return [severity, timestamp, process, thread, level, tag, message]
